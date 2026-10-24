@@ -4,10 +4,7 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="b3c11b07-3cb3-4830-8edc-5000ededbd56" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/templates/admin/dashboard.html" beforeDir="false" afterPath="$PROJECT_DIR$/templates/admin/dashboard.html" afterDir="false" />
-    </list>
+    <list default="true" id="b3c11b07-3cb3-4830-8edc-5000ededbd56" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -216,14 +213,14 @@
       <method v="2" />
     </configuration>
     <configuration name="student_feedback_app" type="Python.FlaskServer">
-      <module name="student-feedback-app" />
+      <module name="student_feedback_app" />
       <option name="target" value="$PROJECT_DIR$/app.py" />
       <option name="targetType" value="PATH" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
       <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="WORKING_DIRECTORY" value="" />
       <option name="IS_MODULE_SDK" value="false" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
@@ -323,7 +320,7 @@
       <option name="presentableId" value="Default" />
       <updated>1792768016408</updated>
       <workItem from="1792768017422" duration="3538000" />
-      <workItem from="1792807836905" duration="7350000" />
+      <workItem from="1792807836905" duration="7630000" />
     </task>
     <servers />
   </component>
