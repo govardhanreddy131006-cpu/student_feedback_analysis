@@ -54,10 +54,10 @@
             </tbody>
         </table>
 
-        <!-- 2. Section-Wise Performance Summaries -->
+        <!-- 2. Section-Wise Performance Summaries (Clean Standard Cards) -->
         <h4 class="mt-4 mb-3 fw-bold text-secondary">Section-Wise Performance Summaries</h4>
         {% for row in averages %}
-            <div class="card shadow-sm p-3 mb-3 border-start border-4 {% if row.average_score >= 4.0 %}border-success{% elif row.average_score >= 3.0 %}border-warning{% else %}border-danger{% endif %}">
+            <div class="card shadow-sm p-3 mb-3 bg-white">
                 <h6 class="fw-bold mb-1">{{ row.section_name }}</h6>
                 <p class="mb-1">
                     <strong>Score:</strong> {{ row.average_score }} / 5.0
@@ -76,9 +76,9 @@
         {% endfor %}
     </div>
 
-    <!-- Right Column: Bar Chart Visualization & Recent Remarks -->
+    <!-- Right Column: Dynamic Color Bar Chart & Recent Remarks -->
     <div class="col-md-6">
-        <!-- 1. Bar Chart Card -->
+        <!-- 1. Dynamic Bar Chart Card -->
         <div class="card p-3 shadow-sm mb-4">
             <h5 class="fw-bold mb-3 text-center">{{ current_course.course_name }} Chart</h5>
             <canvas id="sectionBarChart"></canvas>
@@ -108,6 +108,20 @@
         .then(response => response.json())
         .then(data => {
             const ctx = document.getElementById('sectionBarChart').getContext('2d');
+
+            // Map chart bar colors dynamically based on score
+            const backgroundColors = data.scores.map(score => {
+                if (score >= 4.0) return 'rgba(40, 167, 69, 0.7)';   // Green
+                if (score >= 3.0) return 'rgba(255, 193, 7, 0.7)';  // Yellow
+                return 'rgba(220, 53, 69, 0.7)';                    // Red
+            });
+
+            const borderColors = data.scores.map(score => {
+                if (score >= 4.0) return 'rgba(40, 167, 69, 1)';
+                if (score >= 3.0) return 'rgba(255, 193, 7, 1)';
+                return 'rgba(220, 53, 69, 1)';
+            });
+
             new Chart(ctx, {
                 type: 'bar',
                 data: {
@@ -115,12 +129,15 @@
                     datasets: [{
                         label: 'Average Score (out of 5)',
                         data: data.scores,
-                        backgroundColor: 'rgba(54, 162, 235, 0.6)',
-                        borderColor: 'rgba(54, 162, 235, 1)',
-                        borderWidth: 1
+                        backgroundColor: backgroundColors,
+                        borderColor: borderColors,
+                        borderWidth: 1.5
                     }]
                 },
                 options: {
+                    plugins: {
+                        legend: { display: false }
+                    },
                     scales: {
                         y: { beginAtZero: true, max: 5 }
                     }
