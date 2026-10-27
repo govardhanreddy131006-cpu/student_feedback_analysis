@@ -2,65 +2,45 @@ import random
 import time
 from config import connect
 
-def auto_review_20_students_per_subject():
+def seed_responses_with_roll_numbers():
     conn = connect()
     cursor = conn.cursor(dictionary=True)
 
-    print("Cleaning up existing feedback records...")
+    print("Clearing existing feedback records...")
     cursor.execute("DELETE FROM feedback")
     conn.commit()
 
-    # Fetch all subjects and feedback questions
     cursor.execute("SELECT course_id, course_name FROM courses")
     courses = cursor.fetchall()
 
     cursor.execute("SELECT question_id FROM feedback_questions")
     questions = [q["question_id"] for q in cursor.fetchall()]
 
-    if not courses or not questions:
-        print("Error: Ensure courses and feedback_questions exist in MySQL first!")
-        conn.close()
-        return
-
-    # Sample comments for realistic student remarks
-    sample_remarks = [
-        "Clear explanation of core concepts.",
-        "Interactive lectures and helpful doubt clearing.",
-        "Assignments were well-structured.",
-        "Great practical lab sessions.",
-        "Good course material and pacing.",
-        "Need more live coding practice.",
-        "Overall very satisfied with the instructor.",
-        ""
-    ]
-
-    print("\nStarting auto-review generation (20 students per subject)...")
-
     for course in courses:
         course_id = course["course_id"]
-        course_name = course["course_name"]
+        cursor.execute("SELECT trainer_id, trainer_name FROM trainers WHERE course_id = %s", (course_id,))
+        trainers = cursor.fetchall()
 
-        for student_num in range(1, 21):  # Exactly 20 students
-            # Unique timestamp per student submission to ensure accurate student counts
-            submission_time = time.strftime('%Y-%m-%d %H:%M:%S')
-            comment = random.choice(sample_remarks)
+        for trainer_idx, trainer in enumerate(trainers):
+            trainer_id = trainer["trainer_id"]
 
-            for question_id in questions:
-                # Realistic rating distribution (mostly 4s and 5s, with occasional 3s)
-                rating = random.choices([3, 4, 5], weights=[15, 45, 40])[0]
+            for student_num in range(1, 21):
+                # Format roll numbers like 21121A0501, 21121A0502...
+                roll_number = f"21121A05{student_num:02d}"
+                submission_time = time.strftime('%Y-%m-%d %H:%M:%S')
 
-                sql = """
-                    INSERT INTO feedback (course_id, question_id, rating, comment_optional, submitted_at)
-                    VALUES (%s, %s, %s, %s, %s)
-                """
-                cursor.execute(sql, (course_id, question_id, rating, comment, submission_time))
-
-        print(f"✓ Successfully generated 20 student reviews for: {course_name}")
+                for question_id in questions:
+                    rating = random.choices([3, 4, 5], weights=[20, 50, 30])[0]
+                    sql = """
+                        INSERT INTO feedback (course_id, roll_number, trainer_id, question_id, rating, submitted_at)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """
+                    cursor.execute(sql, (course_id, roll_number, trainer_id, question_id, rating, submission_time))
 
     conn.commit()
     cursor.close()
     conn.close()
-    print("\nAll subjects successfully populated with 20 student reviews each!")
+    print("Successfully seeded responses with student roll numbers!")
 
 if __name__ == "__main__":
-    auto_review_20_students_per_subject()
+    seed_responses_with_roll_numbers()

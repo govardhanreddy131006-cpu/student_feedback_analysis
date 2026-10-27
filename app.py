@@ -1,9 +1,58 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify
+import io
+import matplotlib
+import matplotlib.pyplot as plt
+from flask import Flask, Response, jsonify, render_template_string, request
 from config import connect
+
+# Non-interactive backend for server-side plot rendering
+matplotlib.use("Agg")
+
+app = Flask(__name__)
+
+
+# ==========================================
+# 1. DATABASE HELPER FUNCTIONS
+# ==========================================
+
+def get_section_averages(course_id=None, trainer_id=None):
+    """Fetch section averages directly using SQL aggregation filtered by course and/or trainer."""
+    conn = connect()
+    cursor = conn.cursor(dictionary=True)
+
+    sql = """
+          SELECT s.section_name, ROUND(AVG(f.rating), 2) AS average_score
+          FROM feedback f
+                   JOIN feedback_questions q ON f.question_id = q.question_id
+                   JOIN sections s ON q.section_id = s.section_id
+          WHERE 1 = 1 \
+          """
+    params = []
+
+    # Check for non-empty string filter values
+    if course_id and str(course_id).strip() != "":
+        sql += " AND f.course_id = %s"
+        params.append(course_id)
+
+    if trainer_id and str(trainer_id).strip() != "":
+        sql += " AND f.trainer_id = %s"
+        params.append(trainer_id)
+
+    sql += " GROUP BY s.section_id, s.section_name"
+
+    cursor.execute(sql, params)
+    results = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    for row in results:
+        row["average_score"] = float(row["average_score"])
+
+    return results
 
 
 def get_all_courses():
-    """Fetch all courses for drop-down menus."""
+    """Fetch all available courses."""
     conn = connect()
     cursor = conn.cursor(dictionary=True)
     cursor.execute("SELECT * FROM courses")
@@ -13,132 +62,318 @@ def get_all_courses():
     return courses
 
 
-def get_questions_by_section():
-    """Fetch unique questions grouped by section."""
+def get_all_trainers():
+    """Fetch all trainers."""
     conn = connect()
     cursor = conn.cursor(dictionary=True)
-    sql = """
-          SELECT DISTINCT q.question_id, \
-                          q.question_text, \
-                          s.section_id, \
-                          s.section_name
-          FROM feedback_questions q
-                   JOIN sections s ON q.section_id = s.section_id
-          ORDER BY s.section_id, q.question_id \
-          """
-    cursor.execute(sql)
-    rows = cursor.fetchall()
+    cursor.execute("SELECT trainer_id, trainer_name, course_id, gender FROM trainers")
+    trainers = cursor.fetchall()
     cursor.close()
     conn.close()
-
-    sections = {}
-    for row in rows:
-        sec_name = row["section_name"]
-        if sec_name not in sections:
-            sections[sec_name] = []
-        if not any(q["question_text"] == row["question_text"] for q in sections[sec_name]):
-            sections[sec_name].append(row)
-
-    return sections
+    return trainers
 
 
-def insert_feedback(course_id, responses, comment=""):
-    """CREATE Operation: Insert student rating responses."""
+def get_questions():
+    """Fetch evaluation questions."""
+    conn = connect()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT question_id, question_text FROM feedback_questions")
+    questions = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return questions
+
+
+def insert_student_feedback(course_id, trainer_id, roll_number, responses, comment):
+    """Insert submitted feedback responses into MySQL."""
     conn = connect()
     cursor = conn.cursor()
-    for question_id, rating in responses.items():
-        sql = "INSERT INTO feedback (course_id, question_id, rating, comment_optional) VALUES (%s, %s, %s, %s)"
-        cursor.execute(sql, (course_id, question_id, rating, comment))
+    sql = """
+          INSERT INTO feedback (course_id, trainer_id, roll_number, question_id, rating, comment_optional)
+          VALUES (%s, %s, %s, %s, %s, %s) \
+          """
+    data = [(course_id, trainer_id, roll_number, q_id, rating, comment) for q_id, rating in responses.items()]
+    cursor.executemany(sql, data)
     conn.commit()
     cursor.close()
     conn.close()
 
 
-def get_section_averages(course_id=None):
-    """READ Operation: Calculate section-wise average ratings and actual student count."""
-    conn = connect()
-    cursor = conn.cursor(dictionary=True)
-
-    # We group by question count to get the exact number of student submissions per section
-    sql = """
-          SELECT s.section_name, \
-                 ROUND(AVG(f.rating), 2)                              AS average_score, \
-                 COUNT(f.feedback_id) / COUNT(DISTINCT f.question_id) AS response_count
-          FROM feedback f
-                   JOIN feedback_questions q ON f.question_id = q.question_id
-                   JOIN sections s ON q.section_id = s.section_id \
-          """
-    params = []
-    if course_id:
-        sql += " WHERE f.course_id = %s"
-        params.append(course_id)
-
-    sql += " GROUP BY s.section_id, s.section_name"
-    cursor.execute(sql, params)
-    results = cursor.fetchall()
-
-    # Round response_count to an integer
-    for row in results:
-        row["response_count"] = int(row["response_count"])
-
-    cursor.close()
-    conn.close()
-    return results
-
-def get_course_details(course_id=None):
-    """Fetch specific course details for heading display."""
-    if not course_id:
-        return {"course_name": "All Subjects Combined", "course_code": "ALL"}
-
-    conn = connect()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT course_name, course_code FROM courses WHERE course_id = %s", (course_id,))
-    course = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return course or {"course_name": "All Subjects Combined", "course_code": "ALL"}
-
-def get_feedback_comments(course_id=None, limit=5):
-    """Fetch recent optional comments provided by students."""
+def get_filtered_student_reviews_json(course_id=None, trainer_id=None):
+    """Fetch student feedback records filtered by course or trainer."""
     conn = connect()
     cursor = conn.cursor(dictionary=True)
 
     sql = """
-          SELECT DISTINCT f.comment_optional, \
-                          c.course_name, \
-                          f.submitted_at
+          SELECT MAX(f.feedback_id)      AS feedback_id, \
+                 f.roll_number, \
+                 c.course_name, \
+                 c.course_code, \
+                 t.trainer_name, \
+                 ROUND(AVG(f.rating), 2) AS average_rating, \
+                 f.comment_optional, \
+                 f.submitted_at
           FROM feedback f
                    JOIN courses c ON f.course_id = c.course_id
-          WHERE f.comment_optional IS NOT NULL
-            AND f.comment_optional != '' \
+                   LEFT JOIN trainers t ON f.trainer_id = t.trainer_id
+          WHERE 1 = 1 \
           """
     params = []
-    if course_id:
+    if course_id and str(course_id).strip() != "":
         sql += " AND f.course_id = %s"
         params.append(course_id)
+    if trainer_id and str(trainer_id).strip() != "":
+        sql += " AND f.trainer_id = %s"
+        params.append(trainer_id)
 
-    sql += " ORDER BY f.submitted_at DESC LIMIT %s"
-    params.append(limit)
-
+    sql += """
+        GROUP BY 
+            f.roll_number, 
+            f.course_id, 
+            c.course_name, 
+            c.course_code, 
+            t.trainer_name, 
+            f.trainer_id, 
+            f.comment_optional, 
+            f.submitted_at
+        ORDER BY f.submitted_at DESC
+    """
     cursor.execute(sql, params)
-    comments = cursor.fetchall()
+    results = cursor.fetchall()
     cursor.close()
     conn.close()
-    return comments
 
-app = Flask(__name__)
+    for r in results:
+        r["average_rating"] = float(r["average_rating"])
+        if r["submitted_at"]:
+            r["submitted_at"] = str(r["submitted_at"])
 
+    return results
+
+
+# ==========================================
+# 2. FLASK ROUTES
+# ==========================================
 
 @app.route("/")
 def index():
+    """Home Selection Page: Choose Course & Trainer to view Analysis."""
     courses = get_all_courses()
-    sections = get_questions_by_section()
-    return render_template("index.html", courses=courses, sections=sections)
+    trainers = get_all_trainers()
+
+    html_code = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Select Subject & Trainer</title>
+        <style>
+            body { font-family: Arial, sans-serif; text-align: center; margin: 40px; background-color: #f4f6f9; }
+            .card { max-width: 500px; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+            h1 { color: #007bff; margin-bottom: 20px; }
+            .form-group { text-align: left; margin-bottom: 15px; }
+            label { font-weight: bold; display: block; margin-bottom: 5px; }
+            select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+            .btn { width: 100%; background-color: #007bff; color: white; padding: 12px; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; margin-top: 10px; }
+            .btn-secondary { background-color: #28a745; display: inline-block; text-decoration: none; width: 95%; text-align: center; margin-top: 15px; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>Select Subject & Trainer</h1>
+            <form action="/analysis" method="GET">
+                <div class="form-group">
+                    <label>Select Subject / Course:</label>
+                    <select name="course_id" id="courseSelect" onchange="filterTrainers()">
+                        <option value="">-- All Subjects Combined --</option>
+                        {% for c in courses %}
+                            <option value="{{ c.course_id }}">{{ c.course_code }} - {{ c.course_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Select Trainer / Faculty:</label>
+                    <select name="trainer_id" id="trainerSelect">
+                        <option value="">-- All Trainers Combined --</option>
+                        {% for t in trainers %}
+                            <option value="{{ t.trainer_id }}" data-course="{{ t.course_id }}">{{ t.trainer_name }} ({{ t.gender }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <button type="submit" class="btn">View Analysis Dashboard</button>
+            </form>
+
+            <a href="/feedback-form" class="btn btn-secondary">Fill Student Feedback Form</a>
+        </div>
+
+        <script>
+        function filterTrainers() {
+            var selectedCourse = document.getElementById("courseSelect").value;
+            var trainerSelect = document.getElementById("trainerSelect");
+            var options = trainerSelect.querySelectorAll("option");
+
+            trainerSelect.value = "";
+
+            options.forEach(function(option) {
+                var courseId = option.getAttribute("data-course");
+                if (!courseId) return;
+
+                if (!selectedCourse || courseId === selectedCourse) {
+                    option.style.display = "block";
+                    option.disabled = false;
+                } else {
+                    option.style.display = "none";
+                    option.disabled = true;
+                }
+            });
+        }
+        </script>
+    </body>
+    </html>
+    """
+    return render_template_string(html_code, courses=courses, trainers=trainers)
 
 
-@app.route("/submit", methods=["POST"])
-def submit():
+@app.route("/analysis")
+def analysis():
+    """Filtered Analysis Page showing section averages and chart."""
+    course_id = request.args.get("course_id", "")
+    trainer_id = request.args.get("trainer_id", "")
+
+    results = get_section_averages(course_id=course_id, trainer_id=trainer_id)
+
+    if not results:
+        table_html = "<p style='color: red; font-weight: bold;'>No feedback ratings submitted for this specific trainer or subject yet.</p>"
+    else:
+        table_rows = "".join(
+            [f"<tr><td>{r['section_name']}</td><td><strong>{r['average_score']} / 5.0</strong></td></tr>" for r in
+             results])
+        table_html = f"""
+        <table class="table">
+            <thead>
+                <tr><th>Section Name</th><th>Average Rating</th></tr>
+            </thead>
+            <tbody>
+                {table_rows}
+            </tbody>
+        </table>
+        """
+
+    json_url = f"/admin/student-details-json?course_id={course_id}&trainer_id={trainer_id}"
+    chart_url = f"/chart.png?course_id={course_id}&trainer_id={trainer_id}"
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Feedback Analysis Dashboard</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; text-align: center; margin: 30px; }}
+            table {{ margin: 20px auto; border-collapse: collapse; width: 60%; }}
+            th, td {{ border: 1px solid #dddddd; padding: 10px; text-align: center; }}
+            th {{ background-color: #007bff; color: white; }}
+            .btn {{ display: inline-block; padding: 10px 15px; background-color: #28a745; color: white; text-decoration: none; border-radius: 5px; margin: 5px; }}
+            .btn-secondary {{ background-color: #6c757d; }}
+        </style>
+    </head>
+    <body>
+        <h1>Filtered Feedback Analysis</h1>
+
+        <a href="/" class="btn btn-secondary">Back to Selection</a>
+        <a href="{json_url}" class="btn" target="_blank">View Subject Student Reviews (JSON)</a>
+
+        <h3>Section Average Ratings</h3>
+        {table_html}
+
+        <h3>Performance Bar Graph</h3>
+        <img src="{chart_url}" alt="Feedback Chart" width="600">
+    </body>
+    </html>
+    """
+    return render_template_string(html_code)
+
+
+@app.route("/feedback-form")
+def feedback_form():
+    """Student feedback submission reference form."""
+    courses = get_all_courses()
+    trainers = get_all_trainers()
+    questions = get_questions()
+
+    html_code = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Student Feedback Entry Form</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; background-color: #f8f9fa; }
+            .container { max-width: 600px; margin: auto; background: white; padding: 25px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+            h2 { text-align: center; color: #007bff; }
+            .form-group { margin-bottom: 15px; text-align: left; }
+            label { font-weight: bold; display: block; margin-bottom: 5px; }
+            input[type="text"], select, textarea { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+            .question-box { background: #e9ecef; padding: 10px; border-radius: 5px; margin-bottom: 10px; text-align: left; }
+            .rating-options label { font-weight: normal; margin-right: 15px; }
+            button { width: 100%; background-color: #28a745; color: white; padding: 10px; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h2>Student Feedback Form</h2>
+            <form action="/submit-feedback" method="POST">
+                <div class="form-group">
+                    <label>Student Roll Number:</label>
+                    <input type="text" name="roll_number" placeholder="e.g. 21121A0501" required>
+                </div>
+                <div class="form-group">
+                    <label>Select Course:</label>
+                    <select name="course_id" required>
+                        <option value="" disabled selected>-- Choose Course --</option>
+                        {% for c in courses %}
+                            <option value="{{ c.course_id }}">{{ c.course_code }} - {{ c.course_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Select Trainer:</label>
+                    <select name="trainer_id" required>
+                        <option value="" disabled selected>-- Choose Faculty --</option>
+                        {% for t in trainers %}
+                            <option value="{{ t.trainer_id }}">{{ t.trainer_name }} ({{ t.gender }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <h3>Evaluation Questions</h3>
+                {% for q in questions %}
+                    <div class="question-box">
+                        <label>{{ q.question_text }}</label>
+                        <div class="rating-options">
+                            {% for r in range(1, 6) %}
+                                <label><input type="radio" name="question_{{ q.question_id }}" value="{{ r }}" required> {{ r }}</label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% endfor %}
+                <div class="form-group">
+                    <label>Optional Remarks:</label>
+                    <textarea name="comment" rows="3" placeholder="Enter remarks..."></textarea>
+                </div>
+                <button type="submit">Submit Feedback</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    """
+    return render_template_string(html_code, courses=courses, trainers=trainers, questions=questions)
+
+
+@app.route("/submit-feedback", methods=["POST"])
+def submit_feedback():
+    """Save submitted student feedback into MySQL."""
     course_id = request.form.get("course_id")
+    trainer_id = request.form.get("trainer_id")
+    roll_number = request.form.get("roll_number", "").strip()
     comment = request.form.get("comment", "")
 
     responses = {}
@@ -147,50 +382,68 @@ def submit():
             q_id = key.split("_")[1]
             responses[q_id] = int(value)
 
-    if course_id and responses:
-        insert_feedback(course_id, responses, comment)
-        return redirect(url_for("success"))
-    return "Invalid submission", 400
+    if course_id and trainer_id and roll_number and responses:
+        insert_student_feedback(course_id, trainer_id, roll_number, responses, comment)
+        return "<h1>Feedback Submitted Successfully!</h1><a href='/'>Back to Home Selection</a>"
+
+    return "Invalid Submission", 400
 
 
-@app.route("/success")
-def success():
-    return render_template("success.html")
+@app.route("/admin/student-details-json")
+def student_reviews_json():
+    """Returns student reviews filtered by selected subject or trainer."""
+    course_id = request.args.get("course_id", "")
+    trainer_id = request.args.get("trainer_id", "")
+
+    reviews = get_filtered_student_reviews_json(course_id=course_id, trainer_id=trainer_id)
+    return jsonify({
+        "status": "success",
+        "filter_course_id": course_id or "All",
+        "filter_trainer_id": trainer_id or "All",
+        "total_filtered_reviews": len(reviews),
+        "student_reviews": reviews
+    })
 
 
-@app.route("/admin/dashboard")
-def dashboard():
-    courses = get_all_courses()
-    selected_course = request.args.get("course_id")
+@app.route("/chart.png")
+def chart():
+    """Generates a filtered Matplotlib bar chart image."""
+    course_id = request.args.get("course_id", "")
+    trainer_id = request.args.get("trainer_id", "")
 
-    # Fetch course header info
-    current_course = get_course_details(course_id=selected_course)
+    results = get_section_averages(course_id=course_id, trainer_id=trainer_id)
 
-    # Calculate 3-section average ratings
-    averages = get_section_averages(course_id=selected_course)
+    fig, ax = plt.subplots(figsize=(7, 4))
 
-    # Fetch student comments summary
-    comments = get_feedback_comments(course_id=selected_course, limit=5)
+    if not results:
+        ax.text(0.5, 0.5, "No Data Available for Selection", ha="center", va="center", fontsize=14, color="gray")
+        ax.axis("off")
+    else:
+        sections = [r["section_name"] for r in results]
+        scores = [r["average_score"] for r in results]
 
-    return render_template(
-        "admin/dashboard.html",
-        averages=averages,
-        courses=courses,
-        selected_course=selected_course,
-        current_course=current_course,
-        comments=comments
-    )
+        # Dynamic bar colors based on rating levels
+        colors = ['#28a745' if s >= 4.0 else '#ffc107' if s >= 3.0 else '#dc3545' for s in scores]
 
+        bars = ax.bar(sections, scores, color=colors, width=0.4)
+        ax.set_title("Section-Wise Feedback Scores", fontsize=12, fontweight="bold")
+        ax.set_xlabel("Evaluation Sections", fontweight="bold")
+        ax.set_ylabel("Average Score (Out of 5)", fontweight="bold")
+        ax.set_ylim(0, 5.5)
 
-@app.route("/api/chart-data")
-def chart_data():
-    course_id = request.args.get("course_id")
-    data = get_section_averages(course_id=course_id)
+        for bar in bars:
+            height = bar.get_height()
+            ax.annotate(f"{height:.2f}", xy=(bar.get_x() + bar.get_width() / 2, height),
+                        xytext=(0, 3), textcoords="offset points", ha="center", va="bottom", fontweight="bold")
 
-    labels = [row["section_name"] for row in data]
-    scores = [float(row["average_score"]) for row in data]
+    plt.tight_layout()
 
-    return jsonify({"labels": labels, "scores": scores})
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format="png", dpi=120)
+    plt.close(fig)
+    buffer.seek(0)
+
+    return Response(buffer.getvalue(), mimetype="image/png")
 
 
 if __name__ == "__main__":
