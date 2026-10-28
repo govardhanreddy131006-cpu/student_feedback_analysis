@@ -28,7 +28,6 @@ def get_section_averages(course_id=None, trainer_id=None):
           """
     params = []
 
-    # Check for non-empty string filter values
     if course_id and str(course_id).strip() != "":
         sql += " AND f.course_id = %s"
         params.append(course_id)
@@ -71,6 +70,51 @@ def get_all_trainers():
     cursor.close()
     conn.close()
     return trainers
+
+
+def get_trainers_grouped_by_course():
+    """Fetch all courses along with their assigned trainers in a nested structure."""
+    conn = connect()
+    cursor = conn.cursor(dictionary=True)
+
+    sql = """
+          SELECT c.course_id, \
+                 c.course_name, \
+                 c.course_code, \
+                 t.trainer_id, \
+                 t.trainer_name, \
+                 t.gender
+          FROM courses c
+                   LEFT JOIN trainers t ON c.course_id = t.course_id
+          ORDER BY c.course_id, t.trainer_id \
+          """
+    cursor.execute(sql)
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    # Group trainers under their respective course
+    courses_dict = {}
+    for row in rows:
+        c_id = row["course_id"]
+        if c_id not in courses_dict:
+            courses_dict[c_id] = {
+                "course_id": c_id,
+                "course_name": row["course_name"],
+                "course_code": row["course_code"],
+                "trainers_count": 0,
+                "trainers": []
+            }
+
+        if row["trainer_id"]:
+            courses_dict[c_id]["trainers"].append({
+                "trainer_id": row["trainer_id"],
+                "trainer_name": row["trainer_name"],
+                "gender": row["gender"]
+            })
+            courses_dict[c_id]["trainers_count"] += 1
+
+    return list(courses_dict.values())
 
 
 def get_questions():
@@ -157,90 +201,53 @@ def get_filtered_student_reviews_json(course_id=None, trainer_id=None):
 
 @app.route("/")
 def index():
-    """Home Selection Page: Choose Course & Trainer to view Analysis."""
-    courses = get_all_courses()
-    trainers = get_all_trainers()
-
+    """Simplified Home Portal Page (No Dropdowns)."""
     html_code = """
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Select Subject & Trainer</title>
+        <title>Student Feedback Portal</title>
         <style>
-            body { font-family: Arial, sans-serif; text-align: center; margin: 40px; background-color: #f4f6f9; }
-            .card { max-width: 500px; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
-            h1 { color: #007bff; margin-bottom: 20px; }
-            .form-group { text-align: left; margin-bottom: 15px; }
-            label { font-weight: bold; display: block; margin-bottom: 5px; }
-            select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
-            .btn { width: 100%; background-color: #007bff; color: white; padding: 12px; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; margin-top: 10px; }
-            .btn-secondary { background-color: #28a745; display: inline-block; text-decoration: none; width: 95%; text-align: center; margin-top: 15px; }
+            body { font-family: Arial, sans-serif; text-align: center; margin: 50px; background-color: #f4f6f9; }
+            .card { max-width: 450px; margin: auto; background: white; padding: 35px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+            h1 { color: #007bff; margin-bottom: 25px; }
+            .btn { display: block; width: 90%; margin: 15px auto; padding: 14px; background-color: #007bff; color: white; text-decoration: none; border-radius: 6px; font-size: 16px; font-weight: bold; }
+            .btn-green { background-color: #28a745; }
+            .btn-info { background-color: #17a2b8; }
         </style>
     </head>
     <body>
         <div class="card">
-            <h1>Select Subject & Trainer</h1>
-            <form action="/analysis" method="GET">
-                <div class="form-group">
-                    <label>Select Subject / Course:</label>
-                    <select name="course_id" id="courseSelect" onchange="filterTrainers()">
-                        <option value="">-- All Subjects Combined --</option>
-                        {% for c in courses %}
-                            <option value="{{ c.course_id }}">{{ c.course_code }} - {{ c.course_name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label>Select Trainer / Faculty:</label>
-                    <select name="trainer_id" id="trainerSelect">
-                        <option value="">-- All Trainers Combined --</option>
-                        {% for t in trainers %}
-                            <option value="{{ t.trainer_id }}" data-course="{{ t.course_id }}">{{ t.trainer_name }} ({{ t.gender }})</option>
-                        {% endfor %}
-                    </select>
-                </div>
-
-                <button type="submit" class="btn">View Analysis Dashboard</button>
-            </form>
-
-            <a href="/feedback-form" class="btn btn-secondary">Fill Student Feedback Form</a>
+            <h1>Student Feedback System</h1>
+            <a href="/analysis" class="btn">View Admin Dashboard</a>
+            <a href="/feedback-form" class="btn btn-green">Fill Student Feedback Form</a>
+            <a href="/admin/trainers-by-course-json" class="btn btn-info" target="_blank">View Courses & Trainers (JSON)</a>
         </div>
-
-        <script>
-        function filterTrainers() {
-            var selectedCourse = document.getElementById("courseSelect").value;
-            var trainerSelect = document.getElementById("trainerSelect");
-            var options = trainerSelect.querySelectorAll("option");
-
-            trainerSelect.value = "";
-
-            options.forEach(function(option) {
-                var courseId = option.getAttribute("data-course");
-                if (!courseId) return;
-
-                if (!selectedCourse || courseId === selectedCourse) {
-                    option.style.display = "block";
-                    option.disabled = false;
-                } else {
-                    option.style.display = "none";
-                    option.disabled = true;
-                }
-            });
-        }
-        </script>
     </body>
     </html>
     """
-    return render_template_string(html_code, courses=courses, trainers=trainers)
+    return render_template_string(html_code)
+
+
+@app.route("/admin/trainers-by-course-json")
+def trainers_by_course_json():
+    """NEW ROUTE: Returns all courses with their assigned list of trainers in JSON format."""
+    grouped_data = get_trainers_grouped_by_course()
+    return jsonify({
+        "status": "success",
+        "total_courses": len(grouped_data),
+        "courses_and_trainers": grouped_data
+    })
 
 
 @app.route("/analysis")
 def analysis():
-    """Filtered Analysis Page showing section averages and chart."""
+    """Analysis Dashboard Page showing section averages, filter controls, and chart."""
     course_id = request.args.get("course_id", "")
     trainer_id = request.args.get("trainer_id", "")
 
+    courses = get_all_courses()
+    trainers = get_all_trainers()
     results = get_section_averages(course_id=course_id, trainer_id=trainer_id)
 
     if not results:
@@ -260,7 +267,7 @@ def analysis():
         </table>
         """
 
-    json_url = f"/admin/student-details-json?course_id={course_id}&trainer_id={trainer_id}"
+    json_reviews_url = f"/admin/student-details-json?course_id={course_id}&trainer_id={trainer_id}"
     chart_url = f"/chart.png?course_id={course_id}&trainer_id={trainer_id}"
 
     html_code = f"""
@@ -269,25 +276,69 @@ def analysis():
     <head>
         <title>Feedback Analysis Dashboard</title>
         <style>
-            body {{ font-family: Arial, sans-serif; text-align: center; margin: 30px; }}
-            table {{ margin: 20px auto; border-collapse: collapse; width: 60%; }}
+            body {{ font-family: Arial, sans-serif; text-align: center; margin: 30px; background-color: #f8f9fa; }}
+            .filter-card {{ max-width: 600px; margin: 0 auto 20px auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }}
+            table {{ margin: 20px auto; border-collapse: collapse; width: 60%; background: white; }}
             th, td {{ border: 1px solid #dddddd; padding: 10px; text-align: center; }}
             th {{ background-color: #007bff; color: white; }}
-            .btn {{ display: inline-block; padding: 10px 15px; background-color: #28a745; color: white; text-decoration: none; border-radius: 5px; margin: 5px; }}
+            .btn {{ display: inline-block; padding: 10px 15px; background-color: #28a745; color: white; text-decoration: none; border-radius: 5px; margin: 5px; cursor: pointer; border: none; }}
             .btn-secondary {{ background-color: #6c757d; }}
+            .btn-info {{ background-color: #17a2b8; }}
+            select {{ padding: 8px; margin: 5px; border-radius: 4px; border: 1px solid #ccc; }}
         </style>
     </head>
     <body>
-        <h1>Filtered Feedback Analysis</h1>
+        <h1>Admin Feedback Analysis Dashboard</h1>
 
-        <a href="/" class="btn btn-secondary">Back to Selection</a>
-        <a href="{json_url}" class="btn" target="_blank">View Subject Student Reviews (JSON)</a>
+        <div class="filter-card">
+            <form action="/analysis" method="GET">
+                <label><strong>Filter Subject:</strong></label>
+                <select name="course_id" id="courseSelect" onchange="filterTrainers()">
+                    <option value="">-- All Subjects --</option>
+                    {"".join([f'<option value="{c["course_id"]}" {"selected" if str(c["course_id"]) == str(course_id) else ""}>{c["course_code"]} - {c["course_name"]}</option>' for c in courses])}
+                </select>
+
+                <label><strong>Filter Trainer:</strong></label>
+                <select name="trainer_id" id="trainerSelect">
+                    <option value="">-- All Trainers --</option>
+                    {"".join([f'<option value="{t["trainer_id"]}" data-course="{t["course_id"]}" {"selected" if str(t["trainer_id"]) == str(trainer_id) else ""}>{t["trainer_name"]}</option>' for t in trainers])}
+                </select>
+
+                <button type="submit" class="btn">Apply Filter</button>
+            </form>
+        </div>
+
+        <a href="/" class="btn btn-secondary">Back to Home</a>
+        <a href="{json_reviews_url}" class="btn btn-info" target="_blank">View Student Reviews (JSON)</a>
 
         <h3>Section Average Ratings</h3>
         {table_html}
 
         <h3>Performance Bar Graph</h3>
         <img src="{chart_url}" alt="Feedback Chart" width="600">
+
+        <script>
+        function filterTrainers() {{
+            var selectedCourse = document.getElementById("courseSelect").value;
+            var trainerSelect = document.getElementById("trainerSelect");
+            var options = trainerSelect.querySelectorAll("option");
+
+            trainerSelect.value = "";
+
+            options.forEach(function(option) {{
+                var cId = option.getAttribute("data-course");
+                if (!cId) return;
+
+                if (!selectedCourse || cId === selectedCourse) {{
+                    option.style.display = "block";
+                    option.disabled = false;
+                }} else {{
+                    option.style.display = "none";
+                    option.disabled = true;
+                }}
+            }});
+        }}
+        </script>
     </body>
     </html>
     """
@@ -384,7 +435,7 @@ def submit_feedback():
 
     if course_id and trainer_id and roll_number and responses:
         insert_student_feedback(course_id, trainer_id, roll_number, responses, comment)
-        return "<h1>Feedback Submitted Successfully!</h1><a href='/'>Back to Home Selection</a>"
+        return "<h1>Feedback Submitted Successfully!</h1><a href='/'>Back to Home</a>"
 
     return "Invalid Submission", 400
 
@@ -422,7 +473,6 @@ def chart():
         sections = [r["section_name"] for r in results]
         scores = [r["average_score"] for r in results]
 
-        # Dynamic bar colors based on rating levels
         colors = ['#28a745' if s >= 4.0 else '#ffc107' if s >= 3.0 else '#dc3545' for s in scores]
 
         bars = ax.bar(sections, scores, color=colors, width=0.4)
