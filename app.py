@@ -7,25 +7,21 @@ from config import connect
 # Non-interactive backend for server-side plot rendering
 matplotlib.use("Agg")
 
+
 app = Flask(__name__)
 
-
-# ==========================================
-# 1. DATABASE HELPER FUNCTIONS
-# ==========================================
-
+#DATA BASE HELPER FUNCTIONS
 def get_section_averages(course_id=None, trainer_id=None):
-    """Fetch section averages directly using SQL aggregation filtered by course and/or trainer."""
     conn = connect()
     cursor = conn.cursor(dictionary=True)
 
     sql = """
-          SELECT s.section_name, ROUND(AVG(f.rating), 2) AS average_score
-          FROM feedback f
-                   JOIN feedback_questions q ON f.question_id = q.question_id
-                   JOIN sections s ON q.section_id = s.section_id
-          WHERE 1 = 1 \
-          """
+        SELECT s.section_name, ROUND(AVG(f.rating), 2) AS average_score
+        FROM feedback f
+        JOIN feedback_questions q ON f.question_id = q.question_id
+        JOIN sections s ON q.section_id = s.section_id
+        WHERE 1=1
+    """
     params = []
 
     if course_id and str(course_id).strip() != "":
@@ -51,7 +47,6 @@ def get_section_averages(course_id=None, trainer_id=None):
 
 
 def get_all_courses():
-    """Fetch all available courses."""
     conn = connect()
     cursor = conn.cursor(dictionary=True)
     cursor.execute("SELECT * FROM courses")
@@ -62,7 +57,6 @@ def get_all_courses():
 
 
 def get_all_trainers():
-    """Fetch all trainers."""
     conn = connect()
     cursor = conn.cursor(dictionary=True)
     cursor.execute("SELECT trainer_id, trainer_name, course_id, gender FROM trainers")
@@ -73,27 +67,25 @@ def get_all_trainers():
 
 
 def get_trainers_grouped_by_course():
-    """Fetch all courses along with their assigned trainers in a nested structure."""
     conn = connect()
     cursor = conn.cursor(dictionary=True)
 
     sql = """
-          SELECT c.course_id, \
-                 c.course_name, \
-                 c.course_code, \
-                 t.trainer_id, \
-                 t.trainer_name, \
-                 t.gender
-          FROM courses c
-                   LEFT JOIN trainers t ON c.course_id = t.course_id
-          ORDER BY c.course_id, t.trainer_id \
-          """
+        SELECT c.course_id,
+               c.course_name,
+               c.course_code,
+               t.trainer_id,
+               t.trainer_name,
+               t.gender
+        FROM courses c
+        LEFT JOIN trainers t ON c.course_id = t.course_id
+        ORDER BY c.course_id, t.trainer_id
+    """
     cursor.execute(sql)
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
 
-    # Group trainers under their respective course
     courses_dict = {}
     for row in rows:
         c_id = row["course_id"]
@@ -118,7 +110,6 @@ def get_trainers_grouped_by_course():
 
 
 def get_questions():
-    """Fetch evaluation questions."""
     conn = connect()
     cursor = conn.cursor(dictionary=True)
     cursor.execute("SELECT question_id, question_text FROM feedback_questions")
@@ -129,13 +120,12 @@ def get_questions():
 
 
 def insert_student_feedback(course_id, trainer_id, roll_number, responses, comment):
-    """Insert submitted feedback responses into MySQL."""
     conn = connect()
     cursor = conn.cursor()
     sql = """
-          INSERT INTO feedback (course_id, trainer_id, roll_number, question_id, rating, comment_optional)
-          VALUES (%s, %s, %s, %s, %s, %s) \
-          """
+        INSERT INTO feedback (course_id, trainer_id, roll_number, question_id, rating, comment_optional)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """
     data = [(course_id, trainer_id, roll_number, q_id, rating, comment) for q_id, rating in responses.items()]
     cursor.executemany(sql, data)
     conn.commit()
@@ -144,24 +134,23 @@ def insert_student_feedback(course_id, trainer_id, roll_number, responses, comme
 
 
 def get_filtered_student_reviews_json(course_id=None, trainer_id=None):
-    """Fetch student feedback records filtered by course or trainer."""
     conn = connect()
     cursor = conn.cursor(dictionary=True)
 
     sql = """
-          SELECT MAX(f.feedback_id)      AS feedback_id, \
-                 f.roll_number, \
-                 c.course_name, \
-                 c.course_code, \
-                 t.trainer_name, \
-                 ROUND(AVG(f.rating), 2) AS average_rating, \
-                 f.comment_optional, \
-                 f.submitted_at
-          FROM feedback f
-                   JOIN courses c ON f.course_id = c.course_id
-                   LEFT JOIN trainers t ON f.trainer_id = t.trainer_id
-          WHERE 1 = 1 \
-          """
+        SELECT MAX(f.feedback_id) AS feedback_id,
+               f.roll_number,
+               c.course_name,
+               c.course_code,
+               t.trainer_name,
+               ROUND(AVG(f.rating), 2) AS average_rating,
+               f.comment_optional,
+               f.submitted_at
+        FROM feedback f
+        JOIN courses c ON f.course_id = c.course_id
+        LEFT JOIN trainers t ON f.trainer_id = t.trainer_id
+        WHERE 1 = 1
+    """
     params = []
     if course_id and str(course_id).strip() != "":
         sql += " AND f.course_id = %s"
@@ -194,14 +183,9 @@ def get_filtered_student_reviews_json(course_id=None, trainer_id=None):
 
     return results
 
-
-# ==========================================
-# 2. FLASK ROUTES
-# ==========================================
-
+#FLASK ROUTES
 @app.route("/")
 def index():
-    """Simplified Home Portal Page (No Dropdowns)."""
     html_code = """
     <!DOCTYPE html>
     <html>
@@ -231,7 +215,6 @@ def index():
 
 @app.route("/admin/trainers-by-course-json")
 def trainers_by_course_json():
-    """NEW ROUTE: Returns all courses with their assigned list of trainers in JSON format."""
     grouped_data = get_trainers_grouped_by_course()
     return jsonify({
         "status": "success",
@@ -242,7 +225,6 @@ def trainers_by_course_json():
 
 @app.route("/analysis")
 def analysis():
-    """Analysis Dashboard Page showing section averages, filter controls, and chart."""
     course_id = request.args.get("course_id", "")
     trainer_id = request.args.get("trainer_id", "")
 
@@ -254,8 +236,8 @@ def analysis():
         table_html = "<p style='color: red; font-weight: bold;'>No feedback ratings submitted for this specific trainer or subject yet.</p>"
     else:
         table_rows = "".join(
-            [f"<tr><td>{r['section_name']}</td><td><strong>{r['average_score']} / 5.0</strong></td></tr>" for r in
-             results])
+            [f"<tr><td>{r['section_name']}</td><td><strong>{r['average_score']} / 5.0</strong></td></tr>" for r in results]
+        )
         table_html = f"""
         <table class="table">
             <thead>
@@ -269,6 +251,16 @@ def analysis():
 
     json_reviews_url = f"/admin/student-details-json?course_id={course_id}&trainer_id={trainer_id}"
     chart_url = f"/chart.png?course_id={course_id}&trainer_id={trainer_id}"
+
+    course_options = "".join([
+        f'<option value="{c["course_id"]}" {"selected" if str(c["course_id"]) == str(course_id) else ""}>{c["course_code"]} - {c["course_name"]}</option>'
+        for c in courses
+    ])
+
+    trainer_options = "".join([
+        f'<option value="{t["trainer_id"]}" data-course="{t["course_id"]}" {"selected" if str(t["trainer_id"]) == str(trainer_id) else ""}>{t["trainer_name"]}</option>'
+        for t in trainers
+    ])
 
     html_code = f"""
     <!DOCTYPE html>
@@ -295,13 +287,13 @@ def analysis():
                 <label><strong>Filter Subject:</strong></label>
                 <select name="course_id" id="courseSelect" onchange="filterTrainers()">
                     <option value="">-- All Subjects --</option>
-                    {"".join([f'<option value="{c["course_id"]}" {"selected" if str(c["course_id"]) == str(course_id) else ""}>{c["course_code"]} - {c["course_name"]}</option>' for c in courses])}
+                    {course_options}
                 </select>
 
                 <label><strong>Filter Trainer:</strong></label>
                 <select name="trainer_id" id="trainerSelect">
                     <option value="">-- All Trainers --</option>
-                    {"".join([f'<option value="{t["trainer_id"]}" data-course="{t["course_id"]}" {"selected" if str(t["trainer_id"]) == str(trainer_id) else ""}>{t["trainer_name"]}</option>' for t in trainers])}
+                    {trainer_options}
                 </select>
 
                 <button type="submit" class="btn">Apply Filter</button>
@@ -347,7 +339,6 @@ def analysis():
 
 @app.route("/feedback-form")
 def feedback_form():
-    """Student feedback submission reference form."""
     courses = get_all_courses()
     trainers = get_all_trainers()
     questions = get_questions()
@@ -421,7 +412,6 @@ def feedback_form():
 
 @app.route("/submit-feedback", methods=["POST"])
 def submit_feedback():
-    """Save submitted student feedback into MySQL."""
     course_id = request.form.get("course_id")
     trainer_id = request.form.get("trainer_id")
     roll_number = request.form.get("roll_number", "").strip()
@@ -442,7 +432,6 @@ def submit_feedback():
 
 @app.route("/admin/student-details-json")
 def student_reviews_json():
-    """Returns student reviews filtered by selected subject or trainer."""
     course_id = request.args.get("course_id", "")
     trainer_id = request.args.get("trainer_id", "")
 
@@ -458,7 +447,6 @@ def student_reviews_json():
 
 @app.route("/chart.png")
 def chart():
-    """Generates a filtered Matplotlib bar chart image."""
     course_id = request.args.get("course_id", "")
     trainer_id = request.args.get("trainer_id", "")
 
