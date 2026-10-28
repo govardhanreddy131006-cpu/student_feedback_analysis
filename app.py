@@ -1,16 +1,11 @@
 import io
-import matplotlib
 import matplotlib.pyplot as plt
 from flask import Flask, Response, jsonify, render_template_string, request
 from config import connect
 
-# Non-interactive backend for server-side plot rendering
-matplotlib.use("Agg")
-
-
 app = Flask(__name__)
 
-#DATA BASE HELPER FUNCTIONS
+
 def get_section_averages(course_id=None, trainer_id=None):
     conn = connect()
     cursor = conn.cursor(dictionary=True)
@@ -183,7 +178,7 @@ def get_filtered_student_reviews_json(course_id=None, trainer_id=None):
 
     return results
 
-#FLASK ROUTES
+
 @app.route("/")
 def index():
     html_code = """
